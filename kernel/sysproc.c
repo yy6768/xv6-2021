@@ -75,12 +75,32 @@ sys_sleep(void)
   return 0;
 }
 
-
 #ifdef LAB_PGTBL
 int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  // buf is start addr, abits is bitmap 
+  uint64 va, abits;
+  // pg_num is
+  int pg_num;
+  unsigned int bitmap = 0;
+  if(argaddr(0, &va) < 0 || argint(1, &pg_num) < 0 || argaddr(2, &abits) < 0) 
+    return -1;
+  if(pg_num > MAXPGNUM) 
+    return -1;
+  pagetable_t pagetable = myproc()->pagetable;
+  for(int i = 0; i < pg_num; i ++) {
+    pte_t* pte = walk(pagetable, va, 0);
+    if(*pte & PTE_A) {
+      bitmap |= 1 << i;
+      *pte &= ~ PTE_A;
+    }
+    va += PGSIZE;
+  }
+  if(copyout(pagetable, abits, (char*) &bitmap, 
+    sizeof(unsigned int)) < 0)
+    return -1;
   return 0;
 }
 #endif
