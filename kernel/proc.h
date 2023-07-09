@@ -96,11 +96,17 @@ struct proc {
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
 
+  // alarm
+  int interval;                // Alarm every interval time                
+  int ticks;                // last call time
+  uint64 handler;              // Alarm handler
+
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
+  struct trapframe *resume_trapframe; // data page for alarm
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
