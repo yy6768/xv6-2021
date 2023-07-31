@@ -303,7 +303,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,16 +310,24 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    
+    // immediately allocate
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // cow
+    *pte &= ~PTE_W; // clear the PTE_W
+    *pte |= PTE_COW; // set the PTE_COW, which is the first RSW bit
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0) {
       goto err;
     }
+    acquire_refcount();
+    incr_refcount((uint64)pa, 1);  
+    release_refcount();
   }
   return 0;
+
 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
@@ -351,6 +358,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
+    // cow check
+    if(cowcheck(pagetable, va0) != 0) {
+      pa0 = cowcopy(pagetable, va0);
+    }
+    
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
@@ -432,3 +444,62 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+// Copy-on-write check
+// check if the pte is valid and the PTE_COW is set
+int
+cowcheck(pagetable_t pagetable, uint64 va)
+{
+  if(va >= MAXVA) 
+    return 0;
+  
+  pte_t *pte = walk(pagetable, va, 0);
+
+  if(pte == 0) 
+    return 0;
+  
+  if(((*pte) & PTE_V) == 0) // not visible
+    return 0;
+
+  return (*pte) & PTE_COW;
+}
+
+// Copy-on-Write copy
+// When the
+uint64 cowcopy(pagetable_t pagetable, uint64 va) {
+  if(cowcheck(pagetable, va) == 0) 
+    return 0;
+
+  va = PGROUNDDOWN(va);
+  pte_t* pte;
+  if((pte = walk(pagetable, va, 0)) == 0)
+    panic("cowcopy: pte should exist");
+  uint64 pa = PTE2PA(*pte);
+  uint64 flags = PTE_FLAGS(*pte);
+
+  char* mem;
+  acquire_refcount();
+  int count = get_refcount(pa);
+  if(count == 1) {
+    *pte = ((*pte) & (~PTE_COW)) | PTE_W;
+    release_refcount();
+    return (uint64) pa;
+  }
+  // alloc the new page to the old page
+  if((mem = kalloc()) == 0) 
+    goto bad; 
+  memmove(mem, (char*)pa, PGSIZE);
+  flags &= ~PTE_COW;
+  flags |= PTE_W;
+  *pte = (*pte) & (~PTE_V);
+  if(mappages(pagetable, va, PGSIZE, (uint64)mem, flags) != 0){
+    kfree(mem);
+    goto bad; 
+  }
+  incr_refcount(pa, -1);
+  release_refcount();
+  return (uint64)mem;
+bad:
+  release_refcount();
+  return 0;
+} 
