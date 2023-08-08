@@ -95,27 +95,68 @@ e1000_init(uint32 *xregs)
 int
 e1000_transmit(struct mbuf *m)
 {
-  //
-  // Your code here.
-  //
   // the mbuf contains an ethernet frame; program it into
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+  acquire(&e1000_lock);
+  // find next packet
+  uint32 index = regs[E1000_TDT];
   
+  // check overflow
+  if(!(tx_ring[index].status & E1000_TXD_STAT_DD)) {
+    release(&e1000_lock);
+    return -1;
+  }
+
+  // free the last mbuf
+  if(tx_mbufs[index]) {
+    mbuffree(tx_mbufs[index]);
+  }
+
+  // fill the desc
+  tx_ring[index].addr = (uint64) m->head;
+  tx_ring[index].length = m->len;
+  tx_ring[index].cmd |= (E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS);
+  tx_mbufs[index] = m;
+
+  // update TDT
+  regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
   return 0;
 }
 
 static void
 e1000_recv(void)
 {
-  //
-  // Your code here.
-  //
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
-}
+  // get next packet index
+  uint32 index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  // check the DD status
+  while (rx_ring[index].status & E1000_RXD_STAT_DD) {
+    // update the len and deliver the buf
+    rx_mbufs[index]->len = rx_ring[index].length;
+    net_rx(rx_mbufs[index]);
+
+    // reset the mbufs and reset the status of the desc
+    struct mbuf* m = mbufalloc(0);
+    if(!m) {
+      
+      panic("e1000");
+    }
+    rx_mbufs[index] = m;
+    rx_ring[index].addr = (uint64) m->head;
+    rx_ring[index].status = 0;
+    
+    // update E1000_RDT
+    regs[E1000_RDT] = index;
+    index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  }
+  
+} 
 
 void
 e1000_intr(void)
