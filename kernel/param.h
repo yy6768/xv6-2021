@@ -24,4 +24,4 @@
 #endif
 #define MAXPATH      128   // maximum file path name
 
-
+#define MAXSYMCIRCLE 10    // maximum symlink circle
