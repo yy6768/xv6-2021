@@ -3,8 +3,12 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "fs.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -65,6 +69,51 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    uint64 va = r_stval();
+    struct vma* vp = 0;
+
+    if(va >= p->sz || va <= p->trapframe->sp) {
+      goto bad;
+    } 
+    for(int i = 0; i < NVMA; i++) {
+      if(va >= p->vma[i].addr && va < p->vma[i].addr + p->vma[i].len){
+        vp = &p->vma[i];
+        break;
+      }
+    }
+    if(!vp) {
+      goto bad;
+    }
+    va = PGROUNDDOWN(va);
+    char *mem;
+    if ((mem = kalloc()) == 0) {
+      goto bad;
+    } 
+    memset(mem, 0, PGSIZE);
+    ilock(vp->file->ip);
+    readi(vp->file->ip, 0, (uint64)mem, va - vp->addr + vp->off, PGSIZE);
+    iunlock(vp->file->ip);
+
+    // set permissions
+    int flags = PTE_U;
+    if (vp->prot & PROT_READ) 
+      flags |= PTE_R;
+    if (vp->prot & PROT_WRITE) 
+      flags |= PTE_W;
+    if (vp->prot & PROT_EXEC)
+      flags |= PTE_X;
+
+    // map pages
+    if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      goto bad;
+    }
+    goto right;
+    bad:
+      p->killed = 1;
+    right:
+      ;
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -305,6 +306,12 @@ fork(void)
 
   pid = np->pid;
 
+  for(int i = 0; i < NVMA; i ++) {
+    if(p->vma[i].addr){
+      memmove(&np->vma[i], &p->vma[i], sizeof(p->vma[i]));
+      filedup(np->vma[i].file);
+    } 
+  }
   release(&np->lock);
 
   acquire(&wait_lock);
@@ -358,6 +365,17 @@ exit(int status)
   end_op();
   p->cwd = 0;
 
+  for (int i = 0; i < NVMA; i++) {
+    struct vma* vp = &p->vma[i];
+    if (vp->addr){
+      if(vp->flags & MAP_SHARED) {
+        filewrite(vp->file, vp->addr, vp->len);
+      }
+      uvmunmap(p->pagetable, vp->addr, vp->len / PGSIZE, 1);
+      fileclose(vp->file);
+      vp->addr = 0;
+    } 
+  }
   acquire(&wait_lock);
 
   // Give any children to init.

@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.glsl": "glsl",
+        "types.h": "c",
+        "param.h": "c",
+        "fcntl.h": "c"
+    }
+}

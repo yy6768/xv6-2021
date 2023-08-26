@@ -484,3 +484,102 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int len, prot, flags, fd, off;
+  struct file* file;
+  struct vma* vma = 0;
+
+  if(argaddr(0, &addr) < 0 ||
+     argint(1, &len) < 0 ||
+     argint(2, &prot) < 0 ||
+     argint(3, &flags) < 0||
+     argfd(4, &fd, &file) < 0 ||
+     argint(5, &off) < 0)
+      return -1;
+  
+  // permission check
+  if (!file->writable && 
+     (prot & PROT_WRITE) && 
+     (flags & MAP_SHARED))  
+    return -1;
+
+  if(off < 0) 
+    return -1;
+  
+  // align
+  addr = PGROUNDDOWN(addr);
+  len = PGROUNDUP(len);
+  
+
+  struct proc* p = myproc();
+  // check heap size
+  if(p->sz + len > MAXVA - 2 * PGSIZE) { 
+    return -1;
+  }
+  // find an unused region in the process's address space
+  for(int i = 0; i < NVMA; ++i) {
+    if(p->vma[i].addr) continue;
+    vma = &p->vma[i];
+    break;
+  }
+
+  if(!vma) {
+    return -1;
+  }
+  
+  if(addr != 0) {
+    vma->addr = addr;
+  } else {
+    vma->addr = p->sz;
+  }
+
+  vma->len = len;
+  vma->flags = flags;
+  vma->prot = prot;
+  vma->fd = fd;
+  vma->off = off;
+  vma->file = file;
+  filedup(file);
+  p->sz += len; 
+  return vma->addr;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int len;
+  if(argaddr(0, &addr) < 0 || argint(1, &len) < 0) 
+    return -1;
+  
+  struct proc* p = myproc();
+  struct vma* vp = 0;
+  addr = PGROUNDDOWN(addr);
+  len = PGROUNDUP(len);
+
+  for(int i = 0; i < NVMA; i++){
+    if(!p->vma[i].addr) continue;
+    if(addr >= p->vma[i].addr 
+       && addr <= p->vma[i].addr + p->vma[i].len){
+      vp = &p->vma[i];
+      
+      if(vp->flags & MAP_SHARED) {
+        filewrite(vp->file, addr, len);
+      }
+      vp->len -= len;
+      uvmunmap(p->pagetable, addr, len/PGSIZE, 1);
+
+      if(vp->len == 0) {
+        fileclose(vp->file);
+        vp->addr = 0;
+      }
+      break;
+    }
+  }
+  
+  return 0;
+}
